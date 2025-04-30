@@ -46,3 +46,5 @@ vcpkg_installed/
 *.exe
 *.out
 *.app
+/input
+/output
