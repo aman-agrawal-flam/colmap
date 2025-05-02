@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# COLMAP Automation Script
+# COLMAP Automation Script (CPU-optimized)
 # Usage: ./colmap_reconstruct.sh /path/to/project_directory
 
 # Check if directory argument is provided
@@ -41,6 +41,13 @@ DATABASE_PATH="$BASE_DIR/database/database.db"
 SPARSE_PATH="$BASE_DIR/sparse"
 DENSE_PATH="$BASE_DIR/dense"
 
+# Detect number of CPU cores to use (leave one free)
+CPU_CORES=$(( $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4) - 1 ))
+if [ "$CPU_CORES" -lt 1 ]; then
+    CPU_CORES=1
+fi
+echo "Using $CPU_CORES CPU cores for processing"
+
 echo "Starting COLMAP reconstruction pipeline..."
 
 # 1. Feature extraction
@@ -48,7 +55,8 @@ echo "Step 1/5: Extracting features (this may take a while)..."
 colmap feature_extractor \
     --database_path "$DATABASE_PATH" \
     --image_path "$IMAGES_DIR" \
-    --SiftExtraction.use_gpu 0
+    --SiftExtraction.use_gpu 0 \
+    --SiftExtraction.num_threads $CPU_CORES
 
 # Check if previous step was successful
 if [ $? -ne 0 ]; then
@@ -60,7 +68,8 @@ fi
 echo "Step 2/5: Matching features (this may take a while)..."
 colmap exhaustive_matcher \
     --database_path "$DATABASE_PATH" \
-    --SiftMatching.use_gpu 0
+    --SiftMatching.use_gpu 0 \
+    --SiftMatching.num_threads $CPU_CORES
 
 if [ $? -ne 0 ]; then
     echo "Error: Feature matching failed"
@@ -72,7 +81,8 @@ echo "Step 3/5: Performing sparse reconstruction (this may take a while)..."
 colmap mapper \
     --database_path "$DATABASE_PATH" \
     --image_path "$IMAGES_DIR" \
-    --output_path "$SPARSE_PATH"
+    --output_path "$SPARSE_PATH" \
+    --Mapper.num_threads $CPU_CORES
 
 if [ $? -ne 0 ]; then
     echo "Error: Sparse reconstruction failed"
@@ -92,18 +102,28 @@ echo "Step 4/5: Undistorting images for dense reconstruction..."
 colmap image_undistorter \
     --image_path "$IMAGES_DIR" \
     --input_path "$SPARSE_PATH/0" \
-    --output_path "$DENSE_PATH"
+    --output_path "$DENSE_PATH" \
+    --max_image_size 2000
 
 if [ $? -ne 0 ]; then
     echo "Error: Image undistortion failed"
     exit 1
 fi
 
-# 5. Dense reconstruction: stereo and fusion
+# 5. Dense reconstruction with CPU-optimized settings
 echo "Step 5/5: Performing dense reconstruction (this may take a long time)..."
+echo "          Using CPU-optimized settings with $CPU_CORES threads"
+
+# Use CPU for patch match stereo with optimized settings
 colmap patch_match_stereo \
     --workspace_path "$DENSE_PATH" \
-    --workspace_format COLMAP
+    --workspace_format COLMAP \
+    --PatchMatchStereo.gpu_index -1 \
+    --PatchMatchStereo.num_iterations 5 \
+    --PatchMatchStereo.window_radius 5 \
+    --PatchMatchStereo.window_step 2 \
+    --PatchMatchStereo.num_samples 15 \
+    --PatchMatchStereo.num_threads $CPU_CORES
 
 if [ $? -ne 0 ]; then
     echo "Error: Stereo matching failed"
@@ -114,7 +134,9 @@ echo "Creating final dense point cloud..."
 colmap stereo_fusion \
     --workspace_path "$DENSE_PATH" \
     --workspace_format COLMAP \
-    --output_path "$DENSE_PATH/fused.ply"
+    --input_type geometric \
+    --output_path "$DENSE_PATH/fused.ply" \
+    --StereoFusion.num_threads $CPU_CORES
 
 if [ $? -ne 0 ]; then
     echo "Error: Stereo fusion failed"
@@ -125,7 +147,8 @@ fi
 echo "Creating mesh from point cloud..."
 colmap poisson_mesher \
     --input_path "$DENSE_PATH/fused.ply" \
-    --output_path "$DENSE_PATH/mesh.ply"
+    --output_path "$DENSE_PATH/mesh.ply" \
+    --PoissonMeshing.trim 7
 
 # Summarize results
 echo ""
