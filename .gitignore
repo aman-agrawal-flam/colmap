@@ -46,5 +46,10 @@ vcpkg_installed/
 *.exe
 *.out
 *.app
-/input
-/output
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.avi
+*.mov
